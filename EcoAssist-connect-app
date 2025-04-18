@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+
+LOCATION_ECOASSIST_FILES="/home/peter/.EcoAssist_files"
+CONDA_DIR="${LOCATION_ECOASSIST_FILES}/miniforge"
+ECOASSISTCONDAENV="${CONDA_DIR}/envs/ecoassistcondaenv-base"
+source "${LOCATION_ECOASSIST_FILES}/miniforge/etc/profile.d/conda.sh"
+source "${LOCATION_ECOASSIST_FILES}/miniforge/bin/activate"
+export PATH="${CONDA_DIR}/bin":$PATH
+conda activate $ECOASSISTCONDAENV
+python /home/peter/EcoAssist-connect/run.py
