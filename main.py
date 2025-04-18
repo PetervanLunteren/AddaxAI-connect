@@ -55,12 +55,6 @@ import sys
 curr_dir = os.path.dirname(os.path.abspath(__file__))
 os.chdir(curr_dir)
 
-# init vars
-fpath_output_dir = os.path.join(curr_dir, 'output')
-fpath_log_file = os.path.join(fpath_output_dir, 'log.txt')
-fpath_deepfaune_variables_json = os.path.join(curr_dir, 'models', 'deepfaune', 'variables.json')
-admin_files_csv = os.path.join(curr_dir, "admin_files.csv")
-
 # if the connection to gmail fails, it will retry with the following params
 # retry *stop_max_attempt_number* times with an exponentially
 # increasing wait time, starting from *wait_exponential_multiplier*
@@ -112,6 +106,7 @@ url_prefix_windows = config['url_prefix_windows']
 url_prefix = url_prefix_windows if osys == "windows" else url_prefix_macos if osys == "macos" else url_prefix_linux
 file_sharing_folder = config['file_sharing_folder']
 camera_id_imei_label_map = config['camera_id_imei_label_map']
+mounted_volume_fpath = config['mounted_volume_fpath']
 
 # gmail 
 gmail_label = config['gmail_label']
@@ -149,6 +144,11 @@ sys.path.insert(0, os.path.join(EcoAssist_files))
 # add utils
 from visualise_detection.bounding_box import bounding_box as bb
 
+# init vars
+fpath_output_dir = os.path.join(mounted_volume_fpath, 'output')
+fpath_log_file = os.path.join(fpath_output_dir, 'log.txt')
+fpath_deepfaune_variables_json = os.path.join(curr_dir, 'models', 'deepfaune', 'variables.json')
+admin_files_csv = os.path.join(curr_dir, "admin_files.csv")
 
 ########################################
 ############ MAIN FUNCTIONS ############
@@ -731,10 +731,23 @@ def predict_single_image(filename, full_path_org, camera_id, project_name):
 # find out to which project the camera belongs to
 def retrieve_project_name_from_imei(input_imei):
     for project_name, project_settings in all_project_settings.items():
-        if int(input_imei) in project_settings["cameras_in_use"] or \
-            str(input_imei) in project_settings["cameras_in_use"]:
-            log(f"found imei '{input_imei}' listed under project '{project_name}'", indent = 2)
-            return project_name
+        try: 
+            log(f"checking project '{project_name}' for imei '{input_imei}'", indent = 2)
+            if int(input_imei) in project_settings["cameras_in_use"] or \
+                str(input_imei) in project_settings["cameras_in_use"]:
+                log(f"found imei '{input_imei}' listed under project '{project_name}'", indent = 2)
+                return project_name
+        except ValueError:
+            try:
+                if str(input_imei) in project_settings["cameras_in_use"]:
+                    log(f"found imei '{input_imei}' listed under project '{project_name}'", indent = 2)
+                    return project_name
+            except ValueError:
+                log(f"could not convert imei '{input_imei}' to str nor to int", indent = 2)
+                continue
+            
+    # if none is found return None
+    return None
 
 # gmail checker with retry functionality
 class IMAPConnection():
@@ -774,9 +787,19 @@ class IMAPConnection():
                         email_message = email.message_from_bytes(raw_email)
                         filename = decode_subject(email_message["Subject"])
                         attachement = fetch_attachment(email_message)
+                        
+                        # normally, the imei number is the first part of the subject
+                        imei_number = filename.split("-", 1)[0]
+
+                        # some newer models have the date as the first part of the filename (e.g., 18/04/2025 12:02:10)
+                        try:
+                            dt_object = datetime.datetime.strptime(imei_number, "%d/%m/%Y %H:%M:%S")
+                            log(f"the first part of the subject is a datetime ({imei_number}), moving IMEI to second part of subject", indent = 2)
+                            imei_number = filename.split("-")[1]
+                        except ValueError:
+                            log(f"the first part of the subject is not a datetime ({imei_number}), continuing...", indent = 2)
 
                         # find out which project it is
-                        imei_number = filename.split("-", 1)[0]
                         try:
                             project_name = retrieve_project_name_from_imei(imei_number)
                         except ValueError as e:
@@ -830,10 +853,7 @@ class IMAPConnection():
                         if filename.lower().endswith(".jpg") or filename.lower().endswith(".jpeg"):
                             exif_data = attachement.info.get('exif')
                             filename = filename.replace(" ", "_")
-                            # fpath_org_img = os.path.join(curr_dir, 'imgs', img_id, filename) # DEBUG
-                            fpath_org_img = os.path.join(curr_dir, 'output', project_name, 'www', 'imgs', img_id, filename)
-                            print(f"DEBUG: {fpath_org_img}")
-                            
+                            fpath_org_img = os.path.join(fpath_output_dir, project_name, 'www', 'imgs', img_id, filename)                            
                             Path(os.path.dirname(fpath_org_img)).mkdir(parents=True, exist_ok=True)
                             if exif_data is not None:
                                 log(f"saved image to {fpath_org_img} with exif data", indent=2)
@@ -882,7 +902,12 @@ class IMAPConnection():
                                 log(f"parsed daily report as", indent=2)
                                 for k, v in daily_report_dict.items():
                                     log(f"{k} : {v}", indent = 3)
+                                    
                                 project_name = retrieve_project_name_from_imei(daily_report_dict['IMEI'])
+                                if project_name is None: # since the camera guys keep on chaning the way their incoming data is structured, we need to check if we can take the IMEI or CamID
+                                    log(f"could not retrieve project name from IMEI '{daily_report_dict['IMEI']}'", indent=2)
+                                    log(f"trying to retrieve project name from CamID '{daily_report_dict['CamID']}'", indent=2)
+                                    project_name = retrieve_project_name_from_imei(daily_report_dict['CamID'])
                                 dst_csv = os.path.join(fpath_output_dir, project_name, "data", "daily_reports.csv")
                                 Path(os.path.dirname(dst_csv)).mkdir(parents=True, exist_ok=True)
                                 add_dict_to_csv(daily_report_dict, dst_csv)
@@ -999,6 +1024,15 @@ def send_whatsapp(detection_payload, full_path_vis, full_path_org):
         send_whatsapp_via_twilio(content_vars, whatsapp_receivers)
     except retrying.RetryError:
         log("maximum retries exceeded. Could not send WhatsApp message.", indent=3)
+    
+    # # remove the image from the file server
+    # if not use_imgbb:
+    #     for src in [full_path_org, full_path_vis]:
+    #         img_id_suffix = os.sep.join(src.split(os.sep)[-3:])
+    #         dst = os.path.join(file_sharing_folder, img_id_suffix)
+    #         subprocess.run(['sudo', 'rm', dst], check=True)
+    #         log(f"removed '{dst}'", indent = 3)
+
 
 # have a separate function so that we can use the retry mechanism to use twilio API
 @retrying.retry(stop_max_attempt_number=stop_max_attempt_number, wait_exponential_multiplier=wait_exponential_multiplier, wait_exponential_max=wait_exponential_max)  
@@ -1619,6 +1653,24 @@ def update_admin_files_csv(new_data):
         subprocess.run(['sudo', 'cp', src, dst], check=True)
         log(f"copied admin_files.csv from '{src}' to '{dst}'.", indent=3)
 
+# remove filesharing files
+def remove_filesharing_files():
+    global file_sharing_folder
+    global admin_files_csv
+    
+    with open(admin_files_csv, 'r') as csv_file:
+        csv_reader = csv.DictReader(csv_file)
+        for row in csv_reader:
+            if row['analysed'] == 'True':
+                img_folder = os.path.join(file_sharing_folder, "imgs", row['img_id'])
+                if os.path.exists(img_folder):
+                    log(f"removing filesharing folder '{img_folder}'", indent=2)
+                    try:
+                        subprocess.run(['sudo', 'rm', '-rf', img_folder], check=True)
+                        log(f"removed '{img_folder}'", indent=3)
+                    except Exception as e:
+                        log(f"could not remove '{img_folder}': {e}", indent=3)
+                        
 ###################################
 ############ MAIN CODE ############
 ###################################
@@ -1644,6 +1696,7 @@ def run_script():
         while True:
             mail_obj.check_tasks()
             time.sleep(7)
+            remove_filesharing_files()
         
     except Exception as e:
 
