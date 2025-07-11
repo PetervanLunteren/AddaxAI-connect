@@ -107,6 +107,7 @@ url_prefix = url_prefix_windows if osys == "windows" else url_prefix_macos if os
 file_sharing_folder = config['file_sharing_folder']
 camera_id_imei_label_map = config['camera_id_imei_label_map']
 mounted_volume_fpath = config['mounted_volume_fpath']
+ftps_folder_str = "/var/ftps/camera/uploads" # TODO fetch from config
 
 # gmail 
 gmail_label = config['gmail_label']
@@ -772,6 +773,130 @@ class IMAPConnection():
     # retry *stop_max_attempt_number* times with an exponentially increasing wait time, starting from *wait_exponential_multiplier* milliseconds, up to a maximum of *wait_exponential_max* milliseconds
     def check_tasks(self):
         try:
+            
+            ###### IMAGES COMING IN VIA FTPS ######
+            
+            # check FTPS folder 
+            log(f"Checking contents of FTPS folder '{ftps_folder_str}'")
+            ftps_files = [f for f in os.listdir(ftps_folder_str) if os.path.isfile(os.path.join(ftps_folder_str, f))]
+            
+            # this FTPS checking is done only for the WUH camera's, as they are the only ones using the FTPS server
+            if ftps_files:
+                log(f"found {len(ftps_files)} file(s) in FTPS folder", indent=1, new_line=True)
+                for i, filename in enumerate(ftps_files):
+                    filepath = os.path.join(ftps_folder_str, filename)
+
+                    # change ownership of the file to the user running the script
+                    try:
+                        subprocess.run(["sudo", "chown", f"peter:peter", filepath], check=True)
+                        log(f"ownership of {filepath} changed to peter:peter")
+                    except subprocess.CalledProcessError as e:
+                        log(f"failed to change ownership: {e}")
+                        continue
+
+                    # images 
+                    if filename.lower().endswith(".jpg") or filename.lower().endswith(".jpeg"):
+                        log(f"filename '{filename}' is an image...", indent=2)
+                        
+                        # images have the camera_id as first part in the filename
+                        camera_id = filename.split("-", 1)[0]
+                        log(f"found camera ID '{camera_id}' in filename '{filename}'", indent=2)
+                        
+                        # retrieve project name from camera ID
+                        project_name = retrieve_project_name_from_imei(camera_id)
+                        if project_name:
+                            log(f"retrieved project name as '{project_name}'", indent = 2)                        
+                        else:
+                            log(f"could not retrieve project name from camera_id '{camera_id}'", indent=2)
+                            continue
+                        
+                        # get unique imgID for folder
+                        img_id = get_img_id()
+                        
+                        # save image with exif if possible
+                        with Image.open(filepath) as img:
+                            exif_data = img.info.get('exif')
+                            filename = filename.replace(" ", "_")
+                            fpath_org_img = os.path.join(fpath_output_dir, project_name, 'www', 'imgs', img_id, filename)                            
+                            Path(os.path.dirname(fpath_org_img)).mkdir(parents=True, exist_ok=True)
+                            if exif_data is not None:
+                                log(f"saved image to {fpath_org_img} with exif data", indent=2)
+                                img.save(fpath_org_img, exif=exif_data)
+                            else:
+                                log(f"saved image to {fpath_org_img} without exif data", indent=2)
+                                img.save(fpath_org_img)
+                                
+                            # remove the original file from FTPS folder so that we don't process it again
+                            log(f"removing original file from FTPS folder", indent=2)
+                            os.remove(filepath)  
+                            
+                        # check if image size is small
+                        with Image.open(fpath_org_img) as image2G:
+                            width, height =image2G.size
+                            if width == 640 and height == 480:
+                                log("image size is small - camera send image with 2G connection", indent = 2)   
+                                
+                                # adding current datetime (as a temporary solution)
+                                log("adding current datetime as temporary solution", indent = 2)
+                                current_datetime = datetime.datetime.now().strftime('%Y:%m:%d %H:%M:%S')
+                                exif_dict = piexif.load(image2G.info['exif']) if 'exif' in image2G.info else {"0th": {}, "Exif": {}, "GPS": {}, "1st": {}, "thumbnail": None}
+                                exif_dict['0th'][piexif.ImageIFD.DateTime] = current_datetime
+                                exif_dict['Exif'][piexif.ExifIFD.DateTimeOriginal] = current_datetime
+                                exif_dict['Exif'][piexif.ExifIFD.DateTimeDigitized] = current_datetime
+                                exif_bytes = piexif.dump(exif_dict)
+
+                                # replace original image with exif image
+                                image2G.save(fpath_org_img, "jpeg", exif=exif_bytes)   
+                            
+                            # add row to CSV file
+                            img_id_suffix_org = "<NA>" if use_imgbb else os.sep.join(fpath_org_img.split(os.sep)[-3:])
+                            # img_id_suffix_vis = "<NA>" if use_imgbb else os.sep.join(fpath_vis_img.split(os.sep)[-3:])
+                            update_admin_files_csv({'img_id': img_id,
+                                                'full_path_org': fpath_org_img,
+                                                'url_org': f"{url_prefix}{img_id_suffix_org}",
+                                                'filename': filename,
+                                                'project_name': project_name,
+                                                'camera_id': camera_id,
+                                                'analysed': False,
+                                                'inference_retry_count': 0})
+                        
+                    # daily reports
+                    elif filename.endswith(".txt") or filename.endswith(".TXT") and "dailyreport" in filename.lower():
+                        log(f"did not run inference because {filename} is not an image", indent=2)
+                        log(f"filename '{filename}' is probabaly a report...", indent=2)
+                        
+                        # daily reports have the camID as second part in the filename
+                        camera_id = filename.split("-", 2)[1]
+                        log(f"found camera ID '{camera_id}' in filename '{filename}'", indent=2)
+                        
+                        # retrieve project name from camera ID
+                        project_name = retrieve_project_name_from_imei(camera_id)
+                        if project_name:
+                            log(f"project name retrieved as '{project_name}'", indent = 2)
+                        else:
+                            log(f"could not retrieve project name from camera_id '{camera_id}'", indent=2)
+                            continue
+                        
+                        # parse daily report
+                        with open(filepath, 'r', encoding='utf-8') as f:
+                            daily_report_contents = f.read()
+                        daily_report_dict = parse_txt_file(daily_report_contents)
+                        log(f"parsed daily report as", indent=2)
+                        for k, v in daily_report_dict.items():
+                            log(f"{k} : {v}", indent = 3)
+                        
+                        # add data to csv
+                        dst_csv = os.path.join(fpath_output_dir, project_name, "data", "daily_reports.csv")
+                        Path(os.path.dirname(dst_csv)).mkdir(parents=True, exist_ok=True)
+                        add_dict_to_csv(daily_report_dict, dst_csv)
+                        
+                        # remove the original file from FTPS folder so that we don't process it again
+                        log(f"removing original file from FTPS folder", indent=2)
+                        os.remove(filepath)  
+            
+            ###### IMAGES COMING IN VIA GMAIL ######
+            
+            # connect to gmail
             log("checking email")
             if debug_mode:
                 self.imap.select(debug_gmail_label)
@@ -1703,7 +1828,6 @@ def run_script():
             time.sleep(7)
             remove_filesharing_files()
             
-            # debug 
         
     except Exception as e:
 
