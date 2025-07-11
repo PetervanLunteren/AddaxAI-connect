@@ -544,9 +544,14 @@ def predict_single_image(filename, full_path_org, camera_id, project_name):
         df_cmd_windows = [f'{curr_dir}/run_deepfaune.bat', str(curr_dir), str(conda_dir), str(classification_threshold), str(EcoAssist_files), str(img_dir)] # not built for smooth yet
         df_cmd_unix = ['bash', f'{curr_dir}/run_deepfaune.command', str(curr_dir), str(conda_dir), str(classification_threshold), str(EcoAssist_files), str(img_dir), str(smooth_bool)]
         run_bash_cmd(df_cmd_windows if osys == "windows" else df_cmd_unix)
+    elif classification_model == "Namibian Desert": 
+        log("running Namibian Desert model", indent = 2)
+        df_cmd_windows = [f'{curr_dir}/run_namibian_desert.bat', str(curr_dir), str(conda_dir), str(classification_threshold), str(EcoAssist_files), str(img_dir)] # not built for smooth yet
+        df_cmd_unix = ['bash', f'{curr_dir}/run_namibian_desert.command', str(curr_dir), str(conda_dir), str(classification_threshold), str(EcoAssist_files), str(img_dir), str(smooth_bool)]
+        run_bash_cmd(df_cmd_windows if osys == "windows" else df_cmd_unix)
     else:
         log(f"UNKNOWN CLASSIFICATION MODEL: {classification_model}", indent = 2)
-                
+
     # loop through json
     json_fpath = os.path.join(img_dir, "image_recognition_file.json")
     with open(json_fpath) as image_recognition_file_content:
@@ -1697,6 +1702,8 @@ def run_script():
             mail_obj.check_tasks()
             time.sleep(7)
             remove_filesharing_files()
+            
+            # debug 
         
     except Exception as e:
 
