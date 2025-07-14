@@ -589,6 +589,12 @@ def predict_single_image(filename, full_path_org, camera_id, project_name):
     # with open(json_fpath, 'w') as outfile:
     #     json.dump(data, outfile, indent=2)
 
+    # check QR code
+    if check_qr_code_contains_cv2(file_path = full_path_org, target_data = "AddaxAI calibration image"):
+        det_label_original = "calibration"
+        detections_dict = {} # if QR code found, remove all the other detections
+        detections_dict["calibration"] = [{'conf': 0, 'bbox': [0, 0, 0, 0], "det_label_original": 'calibration'}]
+
     # if nothing is detected add dummy detection so that people can receive a notification if required
     if detections_dict == {}:
         log(f"detected no objects labelled as empty image", indent = 2)
@@ -892,7 +898,7 @@ class IMAPConnection():
                         
                         # remove the original file from FTPS folder so that we don't process it again
                         log(f"removing original file from FTPS folder", indent=2)
-                        os.remove(filepath)  
+                        os.remove(filepath)
             
             ###### IMAGES COMING IN VIA GMAIL ######
             
@@ -1345,6 +1351,21 @@ def run_bash_cmd(cmd_list):
         if "MPS backend" not in line and \
             "vit_large_patch14_dinov2.lvd142m" not in line:
             log(line, indent = 3, end = '')
+
+# check if QR code on image
+def check_qr_code_contains_cv2(file_path, target_data):
+    
+    log(f"checking if QR code in {file_path} contains '{target_data}'", indent=2)
+    img = cv2.imread(file_path)
+    detector = cv2.QRCodeDetector()
+    data, bbox, _ = detector.detectAndDecode(img)
+
+    if data:
+        log(f"Found QR code with data: {data}", indent=2)
+        return target_data == data
+    else:
+        log("No QR code found.", indent=2)
+        return False
 
 # read daily report
 def parse_txt_file(file):
