@@ -3,6 +3,9 @@
 # Peter van Lunteren, 23 Dec 2024
 
 # TODO: volgens mij returned the inference functie altijd True, ook als ie ergens errort. Return False als er een error is
+# TODO: ALs hij een foto niet kan doen vanwege truncated of naam die niet klopt, dan moet it dat een par keer proberen, en dan weggooien. Nu loopt blijft ie het proberen met de resultaat dat de queue nooit wordt gedaan.
+# TODO: bij FTPS moeten de 000000 nog even van de camID af
+
 
 ###########################################
 ############ INITIALIZE SCRIPT ############
