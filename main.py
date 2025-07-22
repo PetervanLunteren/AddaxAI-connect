@@ -663,6 +663,10 @@ def predict_single_image(filename, full_path_org, camera_id, project_name):
             "det_model_name" : detection_model,
         }
 
+        # temporary solution for BUG in newest Wilfine camera - no datetime in exif data. Will take server datetime.
+        if detection_payload["timestamp"] == "unknown":
+            detection_payload["timestamp"] = datetime.datetime.now().strftime('%Y:%m:%d %H:%M:%S')
+
         # add time elapsed to detection payload
         detection_payload["time_elapsed"] = calc_sec_elapsed(detection_payload["timestamp"])
 
@@ -764,6 +768,34 @@ def retrieve_project_name_from_imei(input_imei):
     # if none is found return None
     return None
 
+def move_to_invalid_files_folder(filepath, filename, error_message):
+    error_folder = os.path.join(ftps_folder_str, "invalid_files")
+    Path(error_folder).mkdir(parents=True, exist_ok=True)
+    
+    # move file to error folder
+    new_filepath = os.path.join(error_folder, filename)
+    shutil.move(filepath, new_filepath)
+    
+    # create a txt file with the same name as the image file
+    error_txt_path = os.path.join(error_folder, f"{os.path.splitext(filename)[0]}-error-log.txt")
+    with open(error_txt_path, 'w') as error_file:
+        error_file.write(f"Error: {error_message}\n")
+        
+    # change ownership of the file to the user running the script
+    try:
+        subprocess.run(["sudo", "chown", f"camera:camaccess", new_filepath], check=True)
+        log(f"ownership of {new_filepath} changed to camera:camaccess")
+    except subprocess.CalledProcessError as e:
+        log(f"failed to change ownership of {new_filepath}: {e}")
+    try:
+        subprocess.run(["sudo", "chown", f"camera:camaccess", error_txt_path], check=True)
+        log(f"ownership of {error_txt_path} changed to camera:camaccess")
+    except subprocess.CalledProcessError as e:
+        log(f"failed to change ownership of {error_txt_path}: {e}")
+    
+    # log the error
+    log(f"placed file '{filename}' in error folder due to: {error_message}", indent=2)
+
 # gmail checker with retry functionality
 class IMAPConnection():
     
@@ -784,7 +816,7 @@ class IMAPConnection():
         try:
             
             ###### IMAGES COMING IN VIA FTPS ######
-            
+                        
             # check FTPS folder 
             log(f"Checking contents of FTPS folder '{ftps_folder_str}'")
             ftps_files = [f for f in os.listdir(ftps_folder_str) if os.path.isfile(os.path.join(ftps_folder_str, f))]
@@ -817,6 +849,7 @@ class IMAPConnection():
                             log(f"retrieved project name as '{project_name}'", indent = 2)                        
                         else:
                             log(f"could not retrieve project name from camera_id '{camera_id}'", indent=2)
+                            move_to_invalid_files_folder(filepath, filename, "could not retrieve project name from camera_id")
                             continue
                         
                         # get unique imgID for folder
@@ -870,7 +903,7 @@ class IMAPConnection():
                                                 'inference_retry_count': 0})
                         
                     # daily reports
-                    elif filename.endswith(".txt") or filename.endswith(".TXT") and "dailyreport" in filename.lower():
+                    elif filename.lower().endswith(".txt") and "dailyreport" in filename.lower():
                         log(f"did not run inference because {filename} is not an image", indent=2)
                         log(f"filename '{filename}' is probabaly a report...", indent=2)
                         
@@ -884,6 +917,7 @@ class IMAPConnection():
                             log(f"project name retrieved as '{project_name}'", indent = 2)
                         else:
                             log(f"could not retrieve project name from camera_id '{camera_id}'", indent=2)
+                            move_to_invalid_files_folder(filepath, filename, "could not retrieve project name from camera_id")
                             continue
                         
                         # parse daily report
@@ -894,6 +928,12 @@ class IMAPConnection():
                         for k, v in daily_report_dict.items():
                             log(f"{k} : {v}", indent = 3)
                         
+                        # check if the daily report is valid
+                        if daily_report_dict.get("signal_percentage", "Unkonwn") == "Unknown":
+                            log(f"daily report is invalid - signal percentage is 'Unknown'", indent=2)
+                            move_to_invalid_files_folder(filepath, filename, "daily report is invalid - signal percentage is 'Unknown'")
+                            continue
+                        
                         # add data to csv
                         dst_csv = os.path.join(fpath_output_dir, project_name, "data", "daily_reports.csv")
                         Path(os.path.dirname(dst_csv)).mkdir(parents=True, exist_ok=True)
@@ -902,6 +942,11 @@ class IMAPConnection():
                         # remove the original file from FTPS folder so that we don't process it again
                         log(f"removing original file from FTPS folder", indent=2)
                         os.remove(filepath)
+                        
+                    else:
+                        log(f"filename '{filename}' is not an image or daily report, skipping...", indent=2)
+                        move_to_invalid_files_folder(filepath, filename, "is not an image JPG or daily report, skipping... Does not match the filename pattern it expects.")
+                        continue
             
             ###### IMAGES COMING IN VIA GMAIL ######
             
