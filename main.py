@@ -54,6 +54,10 @@ from subprocess import Popen
 import subprocess
 import sys
 
+# lets not freak out if the image is truncated
+from PIL import ImageFile
+ImageFile.LOAD_TRUNCATED_IMAGES = True
+
 # set working directory to file location
 curr_dir = os.path.dirname(os.path.abspath(__file__))
 os.chdir(curr_dir)
